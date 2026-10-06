@@ -1,0 +1,46 @@
+model:
+  name: 'osnet_x1_0'
+  pretrained: True
+
+data:
+  type: 'image'
+  root: '/workspace/reid-data'
+  sources: ['veri']
+  targets: ['veri']
+  height: 256
+  width: 256
+  workers: 8
+  combineall: False
+  transforms: ['random_flip', 'random_crop', 'color_jitter', 'random_erase']
+  save_dir: '/workspace/logs/osnet_x1_0_veri_256x256'
+
+sampler:
+  train_sampler: 'RandomIdentitySampler'
+  num_instances: 4
+
+loss:
+  name: 'triplet'
+  softmax:
+    label_smooth: True
+  triplet:
+    margin: 0.3
+    weight_t: 1.0
+    weight_x: 1.0
+
+train:
+  optim: 'amsgrad'
+  lr: 0.00035
+  weight_decay: 0.0005
+  max_epoch: 80
+  batch_size: 64
+  fixbase_epoch: 0
+  lr_scheduler: 'cosine'
+  print_freq: 50
+
+test:
+  batch_size: 256
+  dist_metric: 'euclidean'
+  normalize_feature: False
+  evaluate: False
+  eval_freq: 10
+  rerank: False
