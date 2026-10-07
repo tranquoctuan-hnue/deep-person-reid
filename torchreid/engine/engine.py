@@ -11,7 +11,7 @@ from torch.utils.tensorboard import SummaryWriter
 from torchreid import metrics
 from torchreid.utils import (
     MetricMeter, AverageMeter, re_ranking, open_all_layers, save_checkpoint,
-    open_specified_layers, visualize_ranked_results
+    load_checkpoint, open_specified_layers, visualize_ranked_results
 )
 from torchreid.losses import DeepSupervision
 
@@ -32,6 +32,8 @@ class Engine(object):
         self.use_gpu = (torch.cuda.is_available() and use_gpu)
         self.writer = None
         self.epoch = 0
+        self.mAP = None # mAP of the latest evaluation
+        self.best_mAP = -1
 
         self.model = None
         self.optimizer = None
@@ -72,7 +74,7 @@ class Engine(object):
         else:
             return names_real
 
-    def save_model(self, epoch, rank1, save_dir, is_best=False):
+    def save_model(self, epoch, rank1, save_dir, is_best=False, mAP=None):
         names = self.get_model_names()
 
         for name in names:
@@ -80,13 +82,39 @@ class Engine(object):
                 {
                     'state_dict': self._models[name].state_dict(),
                     'epoch': epoch + 1,
-                    'rank1': rank1,
+                    # plain floats (not numpy scalars) so that the checkpoint
+                    # can be read by torch.load(weights_only=True), torch>=2.6
+                    'rank1': float(rank1),
+                    'mAP': None if mAP is None else float(mAP),
                     'optimizer': self._optims[name].state_dict(),
                     'scheduler': self._scheds[name].state_dict()
                 },
                 osp.join(save_dir, name),
-                is_best=is_best
+                is_best=is_best,
+                save_last=True
             )
+
+    def save_model_and_track_best(self, rank1, save_dir):
+        """Saves the current model as the last checkpoint, and also as
+        the best checkpoint if its mAP is the highest so far."""
+        is_best = self.mAP is not None and self.mAP > self.best_mAP
+        if is_best:
+            self.best_mAP = self.mAP
+        self.save_model(
+            self.epoch, rank1, save_dir, is_best=is_best, mAP=self.mAP
+        )
+
+    def load_best_mAP(self, save_dir):
+        """Reads the mAP of existing best checkpoints in ``save_dir``,
+        so that resuming training does not overwrite a better model."""
+        best_mAP = -1
+        for name in self.get_model_names():
+            fpath = osp.join(save_dir, name, 'model-best.pth.tar')
+            if osp.isfile(fpath):
+                mAP = load_checkpoint(fpath).get('mAP')
+                if mAP is not None:
+                    best_mAP = max(best_mAP, mAP)
+        return best_mAP
 
     def set_model_mode(self, mode='train', names=None):
         assert mode in ['train', 'eval', 'test']
@@ -184,6 +212,7 @@ class Engine(object):
         time_start = time.time()
         self.start_epoch = start_epoch
         self.max_epoch = max_epoch
+        self.best_mAP = self.load_best_mAP(save_dir) if start_epoch > 0 else -1
         print('=> Start training')
 
         for self.epoch in range(self.start_epoch, self.max_epoch):
@@ -206,7 +235,7 @@ class Engine(object):
                     use_metric_cuhk03=use_metric_cuhk03,
                     ranks=ranks
                 )
-                self.save_model(self.epoch, rank1, save_dir)
+                self.save_model_and_track_best(rank1, save_dir)
 
         if self.max_epoch > 0:
             print('=> Final test')
@@ -219,7 +248,9 @@ class Engine(object):
                 use_metric_cuhk03=use_metric_cuhk03,
                 ranks=ranks
             )
-            self.save_model(self.epoch, rank1, save_dir)
+            self.save_model_and_track_best(rank1, save_dir)
+            if self.best_mAP >= 0:
+                print('Best mAP: {:.1%}'.format(self.best_mAP))
 
         elapsed = round(time.time() - time_start)
         elapsed = str(datetime.timedelta(seconds=elapsed))
@@ -339,6 +370,7 @@ class Engine(object):
                 self.writer.add_scalar(f'Test/{name}/rank1', rank1, self.epoch)
                 self.writer.add_scalar(f'Test/{name}/mAP', mAP, self.epoch)
 
+        self.mAP = mAP
         return rank1
 
     @torch.no_grad()

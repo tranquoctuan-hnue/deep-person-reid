@@ -185,7 +185,7 @@ test:
 ```
 
 Lưu ý:
-- torchreid **chỉ lưu checkpoint ở các epoch có đánh giá** (theo `eval_freq`) và ở epoch cuối. Nếu muốn lưu thường xuyên hơn (phòng khi pod bị ngắt) thì giảm `eval_freq`, ví dụ xuống 5.
+- Checkpoint **chỉ được lưu ở các epoch có đánh giá** (theo `eval_freq`) và ở epoch cuối. Nếu muốn lưu thường xuyên hơn (phòng khi pod bị ngắt) thì giảm `eval_freq`, ví dụ xuống 5.
 - `save_dir` đặt trong `/workspace` để log và checkpoint không mất khi stop pod.
 
 Nếu sửa config hoặc code ở local, commit rồi `git push` lên fork, sau đó chạy `git pull` trên pod.
@@ -376,17 +376,28 @@ Rank-1  : xx.x%
 Rank-5  : xx.x%
 ...
 Checkpoint saved to "/workspace/logs/osnet_x1_0_veri_256x256/model/model.pth.tar-10"
+Best checkpoint saved to "/workspace/logs/osnet_x1_0_veri_256x256/model/model-best.pth.tar"
 ```
+
+Các file trong `.../model/`:
+
+| File | Ý nghĩa |
+|---|---|
+| `model.pth.tar-N` | Checkpoint của epoch N (mỗi lần đánh giá lưu một file) |
+| `model-last.pth.tar` | Checkpoint mới nhất, ghi đè ở mỗi lần lưu |
+| `model-best.pth.tar` | Checkpoint có **mAP cao nhất** tính đến hiện tại |
+
+Dòng `Best checkpoint saved ...` chỉ xuất hiện khi mAP vượt mức cao nhất trước đó. Cuối quá trình train, log in thêm `Best mAP: xx.x%`.
 
 ### 6.4. Train tiếp khi bị ngắt
 
 ```bash
 python scripts/main.py --config-file configs/osnet_x1_0_veri_256x256.yaml \
     --root /workspace/reid-data \
-    model.resume /workspace/logs/osnet_x1_0_veri_256x256/model/model.pth.tar-40
+    model.resume /workspace/logs/osnet_x1_0_veri_256x256/model/model-last.pth.tar
 ```
 
-`resume` khôi phục cả optimizer, scheduler và epoch bắt đầu.
+`resume` khôi phục cả optimizer, scheduler và epoch bắt đầu. Khi train tiếp trong cùng `save_dir`, mAP của `model-best.pth.tar` cũ được đọc lại, nên bản best chỉ bị ghi đè khi có mAP thực sự cao hơn.
 
 ---
 
@@ -397,7 +408,7 @@ python scripts/main.py --config-file configs/osnet_x1_0_veri_256x256.yaml \
 ```bash
 python scripts/main.py --config-file configs/osnet_x1_0_veri_256x256.yaml \
     --root /workspace/reid-data \
-    model.load_weights /workspace/logs/osnet_x1_0_veri_256x256/model/model.pth.tar-80 \
+    model.load_weights /workspace/logs/osnet_x1_0_veri_256x256/model/model-best.pth.tar \
     test.evaluate True
 ```
 
@@ -407,7 +418,7 @@ Có thể thêm `test.rerank True` để bật re-ranking. Cách này thường 
 
 ```bash
 # pod
-runpodctl send /workspace/logs/osnet_x1_0_veri_256x256/model/model.pth.tar-80
+runpodctl send /workspace/logs/osnet_x1_0_veri_256x256/model/model-best.pth.tar
 # local
 runpodctl receive <mã>
 ```
@@ -415,7 +426,7 @@ runpodctl receive <mã>
 Hoặc dùng `scp`:
 
 ```bash
-scp -P <PORT> root@<IP>:/workspace/logs/osnet_x1_0_veri_256x256/model/model.pth.tar-80 .
+scp -P <PORT> root@<IP>:/workspace/logs/osnet_x1_0_veri_256x256/model/model-best.pth.tar .
 ```
 
 ### 7.3. Dùng model để trích đặc trưng
@@ -427,7 +438,7 @@ from torchreid.utils import FeatureExtractor
 
 extractor = FeatureExtractor(
     model_name='osnet_x1_0',
-    model_path='model.pth.tar-80',
+    model_path='model-best.pth.tar',
     image_size=(256, 256),
     device='cuda'
 )

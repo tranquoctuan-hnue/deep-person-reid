@@ -18,7 +18,11 @@ __all__ = [
 
 
 def save_checkpoint(
-    state, save_dir, is_best=False, remove_module_from_keys=False
+    state,
+    save_dir,
+    is_best=False,
+    remove_module_from_keys=False,
+    save_last=False
 ):
     r"""Saves checkpoint.
 
@@ -29,6 +33,8 @@ def save_checkpoint(
             ``model-best.pth.tar``. Default is False.
         remove_module_from_keys (bool, optional): whether to remove "module."
             from layer names. Default is False.
+        save_last (bool, optional): if True, this checkpoint will be copied and named
+            ``model-last.pth.tar`` (overwritten at every call). Default is False.
 
     Examples::
         >>> state = {
@@ -55,7 +61,11 @@ def save_checkpoint(
     torch.save(state, fpath)
     print('Checkpoint saved to "{}"'.format(fpath))
     if is_best:
-        shutil.copy(fpath, osp.join(osp.dirname(fpath), 'model-best.pth.tar'))
+        best_fpath = osp.join(osp.dirname(fpath), 'model-best.pth.tar')
+        shutil.copy(fpath, best_fpath)
+        print('Best checkpoint saved to "{}"'.format(best_fpath))
+    if save_last:
+        shutil.copy(fpath, osp.join(osp.dirname(fpath), 'model-last.pth.tar'))
 
 
 def load_checkpoint(fpath):
