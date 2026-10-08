@@ -12,6 +12,8 @@ Tóm tắt các bước:
 6. Train, theo dõi tiến trình, train tiếp nếu bị ngắt.
 7. Đánh giá và tải model về.
 
+Mục 10 hướng dẫn train gộp VeRi với bộ MoRe (xe máy).
+
 ---
 
 ## 0. Thông số dữ liệu và lựa chọn chính
@@ -468,3 +470,95 @@ features = extractor(['img1.jpg', 'img2.jpg'])  # tensor (2, 512)
 | `CUDA out of memory` | Giảm `train.batch_size` (giữ chia hết cho `num_instances=4`) hoặc giảm `test.batch_size` |
 | `DataLoader worker ... killed` / hết RAM | Giảm `data.workers` |
 | Mất log hoặc checkpoint sau khi stop pod | `save_dir` không nằm trong `/workspace`. Phải lưu vào Volume Disk |
+
+---
+
+## 10. Huấn luyện gộp VeRi + MoRe (ô tô + xe máy)
+
+MoRe (Figueiredo et al., WACV 2021) là bộ dữ liệu re-identification cho **xe máy**. Fork đã có sẵn class dataset `more` ([torchreid/data/datasets/image/more.py](torchreid/data/datasets/image/more.py)) và config gộp [configs/osnet_x0_25_veri_more_256x256.yaml](configs/osnet_x0_25_veri_more_256x256.yaml).
+
+### 10.1. Thông số
+
+| | VeRi | MoRe | Gộp (train) |
+|---|---|---|---|
+| ID train | 576 | 1.913 | **2.489** |
+| Ảnh train | 37.778 | 7.032 | **44.810** |
+| Camera | 20 | 12 (6 cặp camA/camB) | 32 |
+| Query / gallery | 1.678 / 11.579 | 3.828 / 10.587 (gồm 3.478 distractor) | đánh giá riêng từng bộ |
+| W/H trung vị | 1,14 | **0,66** (xe máy cao hơn rộng) | — |
+
+- **Kích thước đầu vào vẫn là `256×256`.** Hai bộ có tỷ lệ khung hình ngược nhau, nên ảnh vuông là mức trung hoà ít méo nhất cho cả hai.
+- **Cách chia query/gallery của MoRe:**
+  - Train/test dùng đúng `train_files.txt` / `test_files.txt` có sẵn trong bộ dữ liệu.
+  - Query: lấy ảnh đầu tiên của mỗi cặp (ID, camera).
+  - Gallery: toàn bộ ảnh test cộng với ảnh distractor.
+  - Khi tính điểm, ảnh cùng ID và cùng camera với query bị loại, nên query phải tìm đúng xe ở camera còn lại của cặp.
+- **Cách gộp:** torchreid tự nối tập train của hai bộ và đánh số lại ID/camera, không cần copy ảnh vào một thư mục chung.
+- **Đánh giá:** mỗi bộ được đánh giá riêng. `model-best.pth.tar` được chọn theo **mAP trung bình** của VeRi và MoRe (log in dòng `Mean mAP over ['veri', 'more']: ...`).
+
+### 10.2. Đưa MoRe lên pod
+
+Ở local, nén nguyên thư mục `MoRe` (~710 MB):
+
+```bash
+cd ~/Downloads
+zip -rq MoRe.zip MoRe
+runpodctl send MoRe.zip
+```
+
+Trên pod:
+
+```bash
+cd /workspace/reid-data
+runpodctl receive <mã>
+unzip -q MoRe.zip && rm MoRe.zip
+```
+
+Cấu trúc thư mục trên pod phải như sau. Thư mục con `MoRe - Final Version` có thể giữ nguyên tên, có dấu cách cũng được:
+
+```
+/workspace/reid-data/
+├── VeRi/
+│   ├── image_train/  image_query/  image_test/ ...
+└── MoRe/
+    └── MoRe - Final Version/
+        ├── train_files.txt  test_files.txt
+        ├── pair01/ ... pair06/      (camA/, camB/)
+        └── Distractors/
+```
+
+Kiểm tra trên pod:
+
+```bash
+python -c "import torchreid; d = torchreid.data.datasets.init_image_dataset('more', root='/workspace/reid-data'); print(d.num_train_pids)"
+# Kết quả mong đợi: 1913
+```
+
+### 10.3. Train
+
+```bash
+python scripts/main.py \
+    --config-file configs/osnet_x0_25_veri_more_256x256.yaml \
+    --root /workspace/reid-data
+```
+
+Config mặc định dùng `osnet_x0_25` với batch 176 (khoảng 90% VRAM của card 8 GB). Muốn dùng `osnet_x1_0` thì đổi model và giảm batch:
+
+```bash
+python scripts/main.py --config-file configs/osnet_x0_25_veri_more_256x256.yaml \
+    --root /workspace/reid-data \
+    model.name osnet_x1_0 train.batch_size 40 \
+    data.save_dir /workspace/logs/osnet_x1_0_veri_more_256x256
+```
+
+Mỗi lần đánh giá, log in kết quả của từng bộ rồi in mAP trung bình:
+
+```
+##### Evaluating veri (source) #####
+mAP: ...
+##### Evaluating more (source) #####
+mAP: ...
+Mean mAP over ['veri', 'more']: ...
+```
+
+Nếu chỉ muốn đánh giá trên MoRe mà không tính distractor, sửa `use_distractors=False` trong `MoRe.__init__`.

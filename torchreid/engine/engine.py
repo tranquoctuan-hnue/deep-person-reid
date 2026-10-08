@@ -346,6 +346,7 @@ class Engine(object):
         """
         self.set_model_mode('eval')
         targets = list(self.test_loader.keys())
+        mAPs = []
 
         for name in targets:
             domain = 'source' if name in self.datamanager.sources else 'target'
@@ -369,8 +370,12 @@ class Engine(object):
             if self.writer is not None:
                 self.writer.add_scalar(f'Test/{name}/rank1', rank1, self.epoch)
                 self.writer.add_scalar(f'Test/{name}/mAP', mAP, self.epoch)
+            mAPs.append(mAP)
 
-        self.mAP = mAP
+        # with several targets, the best model is chosen by their mean mAP
+        self.mAP = float(np.mean(mAPs))
+        if len(targets) > 1:
+            print('Mean mAP over {}: {:.1%}'.format(targets, self.mAP))
         return rank1
 
     @torch.no_grad()

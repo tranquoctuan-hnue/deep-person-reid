@@ -1,0 +1,55 @@
+# Joint training on VeRi-776 (cars) + MoRe (motorcycles).
+# Both datasets are expected under data.root:
+#   <root>/VeRi/image_train, image_query, image_test
+#   <root>/MoRe/train_files.txt, test_files.txt, pair01..06, Distractors
+#     (or <root>/MoRe/MoRe - Final Version/...)
+# Train sets are merged (576 + 1913 = 2489 ids); each dataset is evaluated
+# separately and the best checkpoint is chosen by their mean mAP.
+model:
+  name: 'osnet_x0_25'
+  pretrained: True
+
+data:
+  type: 'image'
+  root: '/workspace/reid-data'
+  sources: ['veri', 'more']
+  targets: ['veri', 'more']
+  # median W/H is 1.14 for VeRi and 0.66 for MoRe; a square input is the
+  # compromise that distorts both the least
+  height: 256
+  width: 256
+  workers: 8
+  combineall: False
+  transforms: ['random_flip', 'random_crop', 'color_jitter', 'random_erase']
+  save_dir: '/workspace/logs/osnet_x0_25_veri_more_256x256'
+
+sampler:
+  train_sampler: 'RandomIdentitySampler'
+  num_instances: 4
+
+loss:
+  name: 'triplet'
+  softmax:
+    label_smooth: True
+  triplet:
+    margin: 0.3
+    weight_t: 1.0
+    weight_x: 1.0
+
+train:
+  optim: 'amsgrad'
+  lr: 0.00035
+  weight_decay: 0.0005
+  max_epoch: 80
+  batch_size: 176 # ~90% of an 8 GB GPU for osnet_x0_25; use 40 for osnet_x1_0
+  fixbase_epoch: 0
+  lr_scheduler: 'cosine'
+  print_freq: 50
+
+test:
+  batch_size: 256
+  dist_metric: 'euclidean'
+  normalize_feature: False
+  evaluate: False
+  eval_freq: 10
+  rerank: False
